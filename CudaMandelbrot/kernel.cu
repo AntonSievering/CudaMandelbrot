@@ -1,8 +1,8 @@
 ﻿#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-#include "MandelBrot.h"
 #define OLC_PGE_APPLICATION
 #include "olcPixelGameEngine.h"
+#include "MandelBrot.h"
 #include <thread>
 #include <fstream>
 
@@ -333,23 +333,20 @@ public:
 				std::this_thread::sleep_for(1ms);
 			}
 
-			for (int x = fromX; x < toX; x++)
-			{
-				for (int y = 0; y < 1080; y += 4)
-				{
-					double* r = new double[4]; double* i = new double[4];
-					for (int j = 0; j < 4; j++)
-					{
-						auto vWorld = ScreenToWorld(olc::vi2d(x, y + j));
-						r[j] = vWorld.x;
-						i[j] = vWorld.y;
-					}
-					
-					size_t* it = itForIntrin(r, i, nMaxIterations);
+			size_t* pIterations = new size_t[1920 * 1080];
 
-					for (int j = 0; j < 4; j++) sprMandelbrot->SetPixel(x, y, GenerateColor(it[j]));
+			MandelbrotIntrinsics({ 0, 0 }, { 1920, 1080 }, ScreenToWorld({ 0, 0 }), ScreenToWorld({ 1920, 1080 }), 1024, pIterations);
+			
+			for (int y = 0; y < 1080; y++)
+			{
+				for (int x = 0; x < 1920; x++)
+				{
+					sprMandelbrot->SetPixel({ x, y }, pPallette[y * 1920 + x]);
 				}
 			}
+
+			delete[] pIterations;
+
 			bThreadDone[id] = true;
 		}
 	}

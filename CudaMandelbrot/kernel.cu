@@ -18,6 +18,35 @@ __device__ double cudaSin(double r)
 
 // z0 = c
 // zn+1 = zn * zn + c
+__global__ void Mandelbrot_kaputt(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements)
+{
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int x = i % 1920;
+	int y = i / 1920;
+
+	if (i < nElements)
+	{
+		double cr, ci, zr, zi, znr, zni;
+
+		cr = fBeginX + (double)x * fIncrease;
+		ci = fBeginY + (double)y * fIncrease;
+		zr = cr;
+		zi = ci;
+
+	REPEAT:
+		znr = zr * zr - zi * zi + cr;
+		zni = 2 * zr * zi + ci;
+		zr = znr;
+		zi = zni;
+
+		pIterations[i]++;
+
+		if (zr * zr + zi * zi < fLimit && pIterations[i] < nMaxIterations)
+			goto REPEAT;
+
+	}
+}
+
 __global__ void Mandelbrot(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements)
 {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
@@ -34,15 +63,17 @@ __global__ void Mandelbrot(const double fBeginX, const double fBeginY, const dou
 		zr = cr;
 		zi = ci;
 
-		while (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
-		{
-			znr = zr * zr - zi * zi + cr;
-			zni = 2 * zr * zi + ci;
-			zr = znr;
-			zi = zni;
+	REPEAT:
+		znr = zr * zr - zi * zi + cr;
+		zni = 2 * zr * zi + ci;
+		zr = znr;
+		zi = zni;
 
-			nIterations++;
-		}
+		nIterations++;
+
+		if (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
+			goto REPEAT;
+
 		pIterations[i] = nIterations;
 	}
 }
@@ -362,7 +393,7 @@ public:
 			// Start the kernel
 			switch (nFractal)
 			{
-			case 0: Mandelbrot <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize); break;
+			case 0: Mandelbrot<<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize); break;
 			case 1: Fractal0 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
 			case 2: Fractal1 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
 			case 3: Fractal2 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
@@ -715,7 +746,7 @@ public:
 int main()
 {
 	MandelBrot brot;
-	if (brot.Construct(1920, 1080, 1, 1, true))
+	if (brot.Construct(1920, 1080, 1, 1, true, true))
 		brot.Start();
 	return 0;
 }

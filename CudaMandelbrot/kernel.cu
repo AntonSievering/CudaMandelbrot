@@ -223,9 +223,6 @@ private:
 
 	size_t nThreads = 1;
 	std::thread* vThreadPool;
-	std::atomic<bool>* bThreadDone;
-	bool bRenderStarted = false;
-	bool bRendererRestartRequest = false;
 	bool bProgrammRunning = true;
 
 	bool bShowAxis = true;
@@ -245,6 +242,8 @@ private:
 	olc::vi2d vSelectedSize = { 0, 0 };
 	olc::Sprite* sprGrid = nullptr;
 	olc::Decal* decGrid = nullptr;
+
+	float fLastRenderTime = 0.0f;
 
 public:
 	MandelBrot()
@@ -307,11 +306,6 @@ public:
 	{
 		while (true)
 		{
-			while (bThreadDone[id])
-			{
-				std::this_thread::sleep_for(1ms);
-			}
-
 			for (int x = fromX; x < toX; x++)
 			{
 				for (int y = 0; y < 1080; y++)
@@ -321,18 +315,12 @@ public:
 					sprMandelbrot->SetPixel(x, y, GenerateColor(it));
 				}
 			}
-			bThreadDone[id] = true;
 		}
 	}
 	void MandelbrotThreadCPUIntrinsic(size_t id, size_t fromX, size_t toX)
 	{
 		while (true)
 		{
-			while (bThreadDone[id])
-			{
-				std::this_thread::sleep_for(1ms);
-			}
-
 			size_t* pIterations = new size_t[1920 * 1080];
 
 			MandelbrotIntrinsics({ 0, 0 }, { 1920, 1080 }, ScreenToWorld({ 0, 0 }), ScreenToWorld({ 1920, 1080 }), 1024, pIterations);
@@ -346,8 +334,6 @@ public:
 			}
 
 			delete[] pIterations;
-
-			bThreadDone[id] = true;
 		}
 	}
 	void MandelbrotThreadCuda(size_t id, size_t fromX, size_t toX)
@@ -368,10 +354,7 @@ public:
 
 		while (bProgrammRunning)
 		{
-			while (bThreadDone[id])
-			{
-				std::this_thread::sleep_for(100us);
-			}
+			auto tStart = std::chrono::system_clock::now();
 
 			olc::vd2d vWorldStart = ScreenToWorld({0.0, 0.0});
 			double fWorldInc = ScreenToWorld({ 1, 0 }).x - vWorldStart.x;
@@ -389,14 +372,14 @@ public:
 			
 			cudaMemcpy(h_pIterations, d_pIterations, nSize * sizeof(size_t), cudaMemcpyDeviceToHost);
 			
+			std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - tStart).count() << std::endl;
+
 			for (size_t j = 0; j < nSize; j++)
 			{
 				size_t x = j % 1920;
 				size_t y = j / 1920;
 				sprMandelbrot->SetPixel(olc::vi2d(x, y), pPallette[h_pIterations[j]]);
 			}
-
-			bThreadDone[id] = true;
 
 			// if in recording mode, save
 			if (bRecording)
@@ -430,34 +413,16 @@ public:
 
 				nFramesDone++;
 			}
+
+			auto tEnd = std::chrono::system_clock::now();
+
+			size_t nUS = std::chrono::duration_cast<std::chrono::microseconds>(tEnd - tStart).count();
+			fLastRenderTime = (float)nUS / 1'000'000.0f;
 		}
 
 		// free the memory
 		free(h_pIterations);
 		cudaFree(d_pIterations);
-	}
-	void StartThreads()
-	{
-		for (int i = 0; i < nThreads; i++)
-		{
-			bThreadDone[i] = false;
-		}
-	}
-	bool ThreadsDone()
-	{
-		bool bThreadsDone = true;
-		for (int i = 0; i < nThreads; i++)
-		{
-			bThreadsDone *= bThreadDone[i];
-		}
-		return bThreadsDone;
-	}
-	void WaitForThreads()
-	{
-		while (!ThreadsDone())
-		{
-			std::this_thread::sleep_for(1ms);
-		}
 	}
 
 	bool OnUserCreate() override
@@ -466,13 +431,9 @@ public:
 		decMandelbrot = new olc::Decal(sprMandelbrot);
 
 		vThreadPool = new std::thread[nThreads];
-		bThreadDone = new std::atomic<bool>[nThreads];
 		size_t pxPerThread = 1920 / nThreads;
 		for (int i = 0; i < nThreads; i++)
-		{
 			vThreadPool[i] = std::thread(&MandelBrot::MandelbrotThreadCuda, this, i, i * pxPerThread, (i + 1) * pxPerThread);
-			bThreadDone[i] = false;
-		}
 
 		sprXAxis = new olc::Sprite(1920, 1);
 		for (int i = 0; i < 1920; i++) sprXAxis->SetPixel(olc::vi2d(i, 0), olc::BLACK);
@@ -553,33 +514,16 @@ public:
 		for (auto& key : vKeys)
 		{
 			if (GetKey(key).bPressed)
-			{
 				nFractal = i;
-				bRendererRestartRequest = true;
-			}
 			i++;
 		}
 
 		Clear(olc::BLACK);
 		olc::vi2d mouse = { GetMouseX(), GetMouseY() };
 
-		if (!bRenderStarted)
-		{
-			StartThreads();
-			bRenderStarted = true;
-		}
-
 		// Draw the Mandelbrot
 		delete decMandelbrot;
 		decMandelbrot = new olc::Decal(sprMandelbrot);
-		if (ThreadsDone())
-		{
-			if (bRendererRestartRequest)
-			{
-				bRendererRestartRequest = false;
-				bRenderStarted = false;
-			}
-		}
 
 		DrawDecal({ 0, 0 }, decMandelbrot);
 
@@ -588,7 +532,6 @@ public:
 		{
 			panOffset += olc::vd2d((olc::vd2d)(mouse - panStart) / fZoom);
 			panStart = mouse;
-			bRendererRestartRequest = true;
 		}
 
 		if (GetKey(olc::Key::SPACE).bPressed) bShowAxis = !bShowAxis;
@@ -606,61 +549,52 @@ public:
 		{
 			nMaxIterations /= 2;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::I).bPressed)
 		{
 			nMaxIterations *= 2;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::O).bPressed && nMaxIterations > 1)
 		{
 			nMaxIterations -= 1;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::P).bPressed)
 		{
 			nMaxIterations += 1;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::T).bPressed)
 		{
 			fLimit /= 2.0;
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::Z).bPressed)
 		{
 			fLimit *= 2.0;
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::ENTER).bPressed)
 		{
 			fZoom = 100;
 			panOffset = { 9.44, 5.37 };
 			panStart = { 0, 0 };
-			bRendererRestartRequest = true;
 		}
 
 		// Recording
 		if (GetKey(olc::Key::F1).bPressed)
 		{
 			bRecording = !bRecording;
-			if (bRecording) bRenderStarted = false;
 		}
 
 		// Zoom and pan stuff
 		olc::vd2d vMouseBeforeZoom = ScreenToWorld(mouse);
 		if (GetKey(olc::Key::Q).bPressed || GetKey(olc::Key::Q).bHeld) fZoom += fZoom * 1.1 * fElapsedTime;
-		if (bRecording && !bRenderStarted) fZoom += fZoom * 1.1 / 120.0;
+		if (bRecording) fZoom += fZoom * 1.1 / 120.0;
 		if (GetKey(olc::Key::E).bPressed || GetKey(olc::Key::E).bHeld) fZoom -= fZoom * 1.1 * fElapsedTime;
 		olc::vd2d vMouseAfterZoom = ScreenToWorld(mouse);
 		if ((vMouseAfterZoom - vMouseBeforeZoom) != olc::vd2d())
 		{
 			panOffset += (vMouseAfterZoom - vMouseBeforeZoom);
-			bRendererRestartRequest = true;
 		}
 
 		// halt if ESC is pressed
@@ -671,13 +605,11 @@ public:
 		{
 			nColorMode = 0;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 		if (GetKey(olc::Key::K).bPressed)
 		{
 			nColorMode = 1;
 			GeneratePallette();
-			bRendererRestartRequest = true;
 		}
 
 		if (GetKey(olc::Key::TAB).bPressed) bShowCoords = !bShowCoords;
@@ -729,8 +661,6 @@ public:
 				// Zoom in
 				panOffset -= (olc::vd2d)(vSelectedStart) / fZoom;
 				fZoom *= 1920.0 / (double)vSelectedSize.x;
-
-				bRendererRestartRequest = true;
 			}
 		}
 		if (!GetMouse(0).bHeld && !GetMouse(0).bPressed && !GetMouse(0).bReleased) bSelectionBlocked = false;
@@ -767,15 +697,16 @@ public:
 		DrawStringDecal({ 5, 405 }, "Du nimmst gerade " + (std::string)(bRecording ? "" : "nicht ") + "auf", col, vfScale);
 
 		DrawStringDecal({ 1500, 25 }, "aufgenommene Frames: " + std::to_string(nFramesDone), col, vfScale);
+		DrawStringDecal({ 1500, 45 }, "letzte Renderzeit: " + std::to_string(fLastRenderTime), col, vfScale);
 
 		return true;
 	}
 	bool OnUserDestroy() override
 	{
-		bProgrammRunning = true;
+		bProgrammRunning = false;
 		for (int i = 0; i < nThreads; i++)
 		{
-			vThreadPool[i].detach();
+			vThreadPool[i].join();
 		}
 		return true;
 	}

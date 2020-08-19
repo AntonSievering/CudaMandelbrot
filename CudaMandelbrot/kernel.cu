@@ -6,19 +6,9 @@
 #include <thread>
 #include <fstream>
 
-#define CPI 0.15915494309189
-
-__device__ double cudaSin(double r)
-{
-	r *= CPI;
-	double v = -16 * r * r + 8 * r;
-	if (r < 0.5) return v;
-	return -v;
-}
-
 // z0 = c
 // zn+1 = zn * zn + c
-__global__ void Mandelbrot_kaputt(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements)
+__global__ void Mandelbrot_wierd(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements)
 {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int x = i % 1920;
@@ -30,8 +20,8 @@ __global__ void Mandelbrot_kaputt(const double fBeginX, const double fBeginY, co
 
 		cr = fBeginX + (double)x * fIncrease;
 		ci = fBeginY + (double)y * fIncrease;
-		zr = cr;
-		zi = ci;
+		zr = 0.0;
+		zi = 0.0;
 
 	REPEAT:
 		znr = zr * zr - zi * zi + cr;
@@ -60,8 +50,38 @@ __global__ void Mandelbrot(const double fBeginX, const double fBeginY, const dou
 
 		cr = fBeginX + (double)x * fIncrease;
 		ci = fBeginY + (double)y * fIncrease;
-		zr = cr;
-		zi = ci;
+		zr = 0;
+		zi = 0;
+
+	REPEAT:
+		znr = zr * zr - zi * zi + cr;
+		zni = 2 * zr * zi + ci;
+		zr = znr;
+		zi = zni;
+
+		nIterations++;
+
+		if (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
+			goto REPEAT;
+
+		pIterations[i] = nIterations;
+	}
+}
+
+// the Julia Set with c = 0.2 + 3.0i
+__global__ void Julia(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements, double cr, double ci)
+{
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int x = i % 1920;
+	int y = i / 1920;
+
+	if (i < nElements)
+	{
+		double zr, zi, znr, zni;
+		size_t nIterations = 0;
+
+		zr = fBeginX + (double)x * fIncrease;
+		zi = fBeginY + (double)y * fIncrease;
 
 	REPEAT:
 		znr = zr * zr - zi * zi + cr;
@@ -186,8 +206,8 @@ __global__ void Fractal3(const double fBeginX, const double fBeginY, const doubl
 
 		cr = fBeginX + (double)x * fIncrease;
 		ci = fBeginY + (double)y * fIncrease;
-		zr = cr;
-		zi = ci;
+		zr = 0;
+		zi = 0;
 
 		while (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
 		{
@@ -275,6 +295,9 @@ private:
 	olc::Decal* decGrid = nullptr;
 
 	float fLastRenderTime = 0.0f;
+	float fIterator = 0;
+	float fIncPerSec = 45.0f;
+	bool bUpdateParameter = false;
 
 public:
 	MandelBrot()
@@ -390,15 +413,26 @@ public:
 			olc::vd2d vWorldStart = ScreenToWorld({0.0, 0.0});
 			double fWorldInc = ScreenToWorld({ 1, 0 }).x - vWorldStart.x;
 
+			auto toRad = [&](int nDegree)
+			{
+				return 3.014159265359 * (double)nDegree / 180.0;
+			};
+
+			double cr, ci;
+			cr = cos(toRad(fIterator));
+			ci = sin(toRad(fIterator));
+
 			// Start the kernel
 			switch (nFractal)
 			{
-			case 0: Mandelbrot<<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize); break;
-			case 1: Fractal0 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
-			case 2: Fractal1 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
-			case 3: Fractal2 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
-			case 4: Fractal3 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
-			case 5: Fractal4 <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);   break;
+			case 0: Mandelbrot       <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 1: Julia            <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize, cr, ci); break;
+			case 2: Fractal0         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 3: Fractal1         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 4: Fractal2         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 5: Fractal3         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 6: Fractal4         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 7: Mandelbrot_wierd <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
 			}
 			
 			cudaMemcpy(h_pIterations, d_pIterations, nSize * sizeof(size_t), cudaMemcpyDeviceToHost);
@@ -489,6 +523,8 @@ public:
 		vKeys.push_back(olc::Key::K4);
 		vKeys.push_back(olc::Key::K5);
 		vKeys.push_back(olc::Key::K6);
+		vKeys.push_back(olc::Key::K7);
+		vKeys.push_back(olc::Key::K8);
 
 		return true;
 	}
@@ -502,6 +538,10 @@ public:
 		case 0: col = olc::WHITE;
 		case 1: col = olc::BLACK;
 		}
+
+		fIterator += bUpdateParameter * fIncPerSec * fElapsedTime;
+		if (GetKey(olc::Key::SPACE).bPressed)
+			bUpdateParameter = !bUpdateParameter;
 
 		auto DrawSpriteLine = [&](olc::Sprite* spr, olc::Pixel col, olc::vi2d pos, int length, int strength, bool bX = true)
 		{
@@ -565,7 +605,7 @@ public:
 			panStart = mouse;
 		}
 
-		if (GetKey(olc::Key::SPACE).bPressed) bShowAxis = !bShowAxis;
+		if (GetKey(olc::Key::SHIFT).bPressed) bShowAxis = !bShowAxis;
 		if (bShowAxis)
 		{
 			olc::vd2d vWorldZero = WorldToScreen({ 0.0, 0.0 });
@@ -620,7 +660,7 @@ public:
 		// Zoom and pan stuff
 		olc::vd2d vMouseBeforeZoom = ScreenToWorld(mouse);
 		if (GetKey(olc::Key::Q).bPressed || GetKey(olc::Key::Q).bHeld) fZoom += fZoom * 1.1 * fElapsedTime;
-		if (bRecording) fZoom += fZoom * 1.1 / 120.0;
+		if (bRecording) fZoom += fElapsedTime * fZoom * 1.1 / 120.0;
 		if (GetKey(olc::Key::E).bPressed || GetKey(olc::Key::E).bHeld) fZoom -= fZoom * 1.1 * fElapsedTime;
 		olc::vd2d vMouseAfterZoom = ScreenToWorld(mouse);
 		if ((vMouseAfterZoom - vMouseBeforeZoom) != olc::vd2d())

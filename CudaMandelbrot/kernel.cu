@@ -68,7 +68,7 @@ __global__ void Mandelbrot(const double fBeginX, const double fBeginY, const dou
 	}
 }
 
-// the Julia Set with c = 0.2 + 3.0i
+// the Julia Set with z0 = 0 and zn+1 = zn * zn + c
 __global__ void Julia(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements, double cr, double ci)
 {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
@@ -86,6 +86,43 @@ __global__ void Julia(const double fBeginX, const double fBeginY, const double f
 	REPEAT:
 		znr = zr * zr - zi * zi + cr;
 		zni = 2 * zr * zi + ci;
+		zr = znr;
+		zi = zni;
+
+		nIterations++;
+
+		if (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
+			goto REPEAT;
+
+		pIterations[i] = nIterations;
+	}
+}
+
+// the Julia Set with z0 = 0 and zn+1 = zn * zn * zn * zn + c
+__global__ void Julia2(const double fBeginX, const double fBeginY, const double fIncrease, size_t* pIterations, size_t nMaxIterations, double fLimit, int nElements, double cr, double ci)
+{
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int x = i % 1920;
+	int y = i / 1920;
+
+	if (i < nElements)
+	{
+		double zr, zi, znr, zni;
+		size_t nIterations = 0;
+
+		zr = fBeginX + (double)x * fIncrease;
+		zi = fBeginY + (double)y * fIncrease;
+
+	REPEAT:
+		znr = zr * zr - zi * zi;
+		zni = 2 * zr * zi;
+		
+		zr = znr;
+		zi = zni;
+
+		znr = zr * zr - zi * zi + cr;
+		zni = 2 * zr * zi + ci;
+
 		zr = znr;
 		zi = zni;
 
@@ -261,7 +298,7 @@ private:
 	std::vector<olc::Key> vKeys;
 	size_t nFractal = 0;
 
-	size_t nMaxIterations = 255;
+	size_t nMaxIterations = 256;
 	olc::Pixel* pPallette = nullptr;
 	double fLimit = 1024.0;
 
@@ -271,6 +308,8 @@ private:
 	olc::Sprite* sprYAxis = nullptr;
 	olc::Decal* decXAxis = nullptr;
 	olc::Decal* decYAxis = nullptr;
+
+	olc::Decal* pBlack = nullptr;
 
 	size_t nThreads = 1;
 	std::thread* vThreadPool;
@@ -294,9 +333,13 @@ private:
 	olc::Sprite* sprGrid = nullptr;
 	olc::Decal* decGrid = nullptr;
 
+	bool bJuliaDone = false;
 	float fLastRenderTime = 0.0f;
 	float fIterator = 0;
 	float fIncPerSec = 45.0f;
+	float fCR_Julia = 0.0f;
+	float fCI_Julia = 0.0f;
+	float fScale = 0.75f;
 	bool bUpdateParameter = false;
 
 public:
@@ -413,31 +456,29 @@ public:
 			olc::vd2d vWorldStart = ScreenToWorld({0.0, 0.0});
 			double fWorldInc = ScreenToWorld({ 1, 0 }).x - vWorldStart.x;
 
-			auto toRad = [&](int nDegree)
+			auto toRad = [&](float nDegree)
 			{
 				return 3.014159265359 * (double)nDegree / 180.0;
 			};
 
-			double cr, ci;
-			cr = cos(toRad(fIterator));
-			ci = sin(toRad(fIterator));
+			fCR_Julia = fScale * cos(toRad(fIterator));
+			fCI_Julia = fScale * sin(toRad(fIterator));
 
 			// Start the kernel
 			switch (nFractal)
 			{
-			case 0: Mandelbrot       <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 1: Julia            <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize, cr, ci); break;
-			case 2: Fractal0         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 3: Fractal1         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 4: Fractal2         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 5: Fractal3         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 6: Fractal4         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
-			case 7: Mandelbrot_wierd <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);         break;
+			case 0: Mandelbrot       <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 1: Julia            <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize, fCR_Julia, fCI_Julia); break;
+			case 2: Julia2           <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize, fCR_Julia, fCI_Julia); break;
+			case 3: Fractal0         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 4: Fractal1         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 5: Fractal2         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 6: Fractal3         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 7: Fractal4         <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
+			case 8: Mandelbrot_wierd <<< nBlocks, nThreads >>> (vWorldStart.x, vWorldStart.y, fWorldInc, d_pIterations, nMaxIterations, fLimit, nSize);                       break;
 			}
 			
 			cudaMemcpy(h_pIterations, d_pIterations, nSize * sizeof(size_t), cudaMemcpyDeviceToHost);
-			
-			std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - tStart).count() << std::endl;
 
 			for (size_t j = 0; j < nSize; j++)
 			{
@@ -477,6 +518,7 @@ public:
 				}
 
 				nFramesDone++;
+				bJuliaDone = true;
 			}
 
 			auto tEnd = std::chrono::system_clock::now();
@@ -492,6 +534,10 @@ public:
 
 	bool OnUserCreate() override
 	{
+		olc::Sprite* spr = new olc::Sprite(1, 1);
+		spr->SetPixel(0, 0, olc::BLACK);
+		pBlack = new olc::Decal(spr);
+
 		sprMandelbrot = new olc::Sprite(1920, 1080);
 		decMandelbrot = new olc::Decal(sprMandelbrot);
 
@@ -525,6 +571,7 @@ public:
 		vKeys.push_back(olc::Key::K6);
 		vKeys.push_back(olc::Key::K7);
 		vKeys.push_back(olc::Key::K8);
+		vKeys.push_back(olc::Key::K9);
 
 		return true;
 	}
@@ -660,12 +707,20 @@ public:
 		// Zoom and pan stuff
 		olc::vd2d vMouseBeforeZoom = ScreenToWorld(mouse);
 		if (GetKey(olc::Key::Q).bPressed || GetKey(olc::Key::Q).bHeld) fZoom += fZoom * 1.1 * fElapsedTime;
-		if (bRecording) fZoom += fElapsedTime * fZoom * 1.1 / 120.0;
+		if (bRecording && nFractal != 1) fZoom += fElapsedTime * fZoom * 1.1 / 120.0;
 		if (GetKey(olc::Key::E).bPressed || GetKey(olc::Key::E).bHeld) fZoom -= fZoom * 1.1 * fElapsedTime;
 		olc::vd2d vMouseAfterZoom = ScreenToWorld(mouse);
 		if ((vMouseAfterZoom - vMouseBeforeZoom) != olc::vd2d())
 		{
 			panOffset += (vMouseAfterZoom - vMouseBeforeZoom);
+		}
+
+		if (bJuliaDone)
+		{
+			bJuliaDone = false;
+			// a full 360° turn means 3000 frames -> at 30fps = 100s video
+			fIterator += 1.0f / 8.333333333333f;
+			std::cout << fIterator << std::endl;
 		}
 
 		// halt if ESC is pressed
@@ -751,7 +806,7 @@ public:
 		DrawStringDecal({ 5, 105 }, "<Q> Hineinzoomen", col, vfScale);
 		DrawStringDecal({ 5, 125 }, "<E> Hinauszoomen", col, vfScale);
 		std::string s = bShowAxis ? "verstecken" : "zeigen";
-		DrawStringDecal({ 5, 145 }, "<SPACE> Koordinatensystem " + s, col, vfScale);
+		DrawStringDecal({ 5, 145 }, "<SHIFT> Koordinatensystem " + s, col, vfScale);
 		s = bShowCoords ? "verstecken" : "zeigen";
 		DrawStringDecal({ 5, 165 }, "<TAB> Korrdinate " + s, col, vfScale);
 		DrawStringDecal({ 5, 185 }, "<U> maximale Interationen halbieren", col, vfScale);
@@ -767,8 +822,17 @@ public:
 		DrawStringDecal({ 5, 385 }, "Zoom: " + std::to_string(fZoom), col, vfScale);
 		DrawStringDecal({ 5, 405 }, "Du nimmst gerade " + (std::string)(bRecording ? "" : "nicht ") + "auf", col, vfScale);
 
-		DrawStringDecal({ 1500, 25 }, "aufgenommene Frames: " + std::to_string(nFramesDone), col, vfScale);
-		DrawStringDecal({ 1500, 45 }, "letzte Renderzeit: " + std::to_string(fLastRenderTime), col, vfScale);
+		DrawStringDecal({ 5, 500 }, "aufgenommene Frames: " + std::to_string(nFramesDone), col, vfScale);
+		DrawStringDecal({ 5, 520 }, "letzte Renderzeit: " + std::to_string(fLastRenderTime), col, vfScale);
+
+		if (nFractal == 1 || nFractal == 2)
+		{
+			DrawStringDecal({ 5, 600 }, "Julia-Menge C: " + std::to_string(fCR_Julia) + " + " + std::to_string(fCI_Julia) + "i", col, vfScale);
+			DrawStringDecal({ 5, 620 }, "k: " + std::to_string(fScale), col, vfScale);
+			DrawDecal(WorldToScreen({ fCR_Julia, fCI_Julia }), pBlack, olc::vf2d(fZoom, fZoom) / 50.0f);
+		}
+		if (GetKey(olc::Key::A).bHeld) fScale += fElapsedTime * fScale;
+		if (GetKey(olc::Key::D).bHeld) fScale -= fElapsedTime * fScale;
 
 		return true;
 	}

@@ -11,7 +11,6 @@ folder_name = "frames/"
 filenames = [file for file in os.listdir(os.path.join(folder_name)) if file.endswith('.frame')]
 print("found {} frame files".format(len(filenames)))
 
-i = 0
 
 
 def gen_string(n, len):
@@ -26,8 +25,11 @@ tStart = time.time()
 
 for file in filenames:
     frame = load_values(folder_name + file)
+    i = int(file[5:10])
+    
     colorize(frame, folder_name + "frame" + gen_string(i, 5) + ".png")
-    i += 1
+    os.system("del frames\\" + file)
+    
     print("{} files done".format(i))
 
 tEnd = time.time()

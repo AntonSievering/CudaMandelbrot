@@ -17,11 +17,12 @@ __global__ void Mandelbrot_wierd(const double fBeginX, const double fBeginY, con
 	if (i < nElements)
 	{
 		double cr, ci, zr, zi, znr, zni;
+		size_t nIterations = 0;
 
 		cr = fBeginX + (double)x * fIncrease;
 		ci = fBeginY + (double)y * fIncrease;
-		zr = 0.0;
-		zi = 0.0;
+		zr = 0;
+		zi = 0;
 
 	REPEAT:
 		znr = zr * zr - zi * zi + cr;
@@ -29,11 +30,12 @@ __global__ void Mandelbrot_wierd(const double fBeginX, const double fBeginY, con
 		zr = znr;
 		zi = zni;
 
-		pIterations[i]++;
+		nIterations++;
 
-		if (zr * zr + zi * zi < fLimit && pIterations[i] < nMaxIterations)
+		if (zr * zr + zi * zi < fLimit && nIterations < nMaxIterations)
 			goto REPEAT;
 
+		pIterations[i] = nIterations;
 	}
 }
 
@@ -843,6 +845,7 @@ public:
 		{
 			vThreadPool[i].join();
 		}
+
 		return true;
 	}
 };
